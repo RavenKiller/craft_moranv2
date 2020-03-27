@@ -31,7 +31,7 @@ def list_files(in_path):
     # gt_files.sort()
     return img_files, mask_files, gt_files
 
-def saveResult(img_file, img, boxes, dirname='./result/', verticals=None, texts=None):
+def saveResult(img_file, img, boxes, dirname='./result/', save_file=True, verticals=None, texts=None):
         """ save text detection result one by one
         Args:
             img_file (str): image file name
@@ -68,12 +68,14 @@ def saveResult(img_file, img, boxes, dirname='./result/', verticals=None, texts=
 
                 if texts is not None:
                     font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 1.5
+                    font_scale = 0.5
                     cv2.putText(img, "{}".format(texts[i]), (poly[0][0]+1, poly[0][1]+1), font, font_scale, (0, 0, 0), thickness=1)
                     cv2.putText(img, "{}".format(texts[i]), tuple(poly[0]), font, font_scale, (0, 255, 255), thickness=1)
 
         # Save result image
-        cv2.imwrite(res_img_file, img)
+        if save_file:
+            cv2.imwrite(res_img_file, img)
+        return img
 
 def saveSplitTextRects(img,rot_rects,bboxes,save_folder="result",save_file=True,save_prefix="rect",is_save=True):
     loose = 5 # add more pixels into the rectangle
@@ -83,36 +85,41 @@ def saveSplitTextRects(img,rot_rects,bboxes,save_folder="result",save_file=True,
         cy = rectangle[0][1]
         width = rectangle[1][0]
         height = rectangle[1][1]
-
         angle = rectangle[2]
         (h,w) = img.shape[:2]
-        
-        #设置旋转矩阵
-        M = cv2.getRotationMatrix2D((w/2,h/2),angle,1.0)
-        cos = np.abs(M[0,0])
-        sin = np.abs(M[0,1])
-        
-        # 计算图像旋转后的新边界
-        nW = int((h*sin)+(w*cos))
-        nH = int((h*cos)+(w*sin))
-        # 调整旋转矩阵的移动距离（t_{x}, t_{y}）
-        M[0,2] += (nW/2) - w/2
-        M[1,2] += (nH/2) - h/2
-        
-        img_rotated = cv2.warpAffine(img,M,(nW,nH))
+        if abs(angle)>1:
+            #设置旋转矩阵
+            M = cv2.getRotationMatrix2D((w/2,h/2),angle,1.0)
+            cos = np.abs(M[0,0])
+            sin = np.abs(M[0,1])
+            
+            # 计算图像旋转后的新边界
+            nW = int((h*sin)+(w*cos))
+            nH = int((h*cos)+(w*sin))
+            # 调整旋转矩阵的移动距离（t_{x}, t_{y}）
+            M[0,2] += (nW/2) - w/2
+            M[1,2] += (nH/2) - h/2
+            
+            img_rotated = cv2.warpAffine(img,M,(nW,nH))
 
-        res = np.dot(M, np.array([[cx], [cy], [1]]))
-        cx = int(res[0,0])
-        cy = int(res[1,0])
-        x1 = int(cx-width/2)
-        y1 = int(cy-height/2)
-        x2 = int(cx+width/2)
-        y2 = int(cy-height/2)
-        x3 = int(cx+width/2)
-        y3 = int(cy+height/2)
-        x4 = int(cx-width/2)
-        y4 = int(cy+height/2)
-        img_cut = img_rotated[max(0,y1-loose):min(nH,y3+loose),max(0,x1-loose):min(nW,x3+loose),:]
+            res = np.dot(M, np.array([[cx], [cy], [1]]))
+            cx = int(res[0,0])
+            cy = int(res[1,0])
+            x1 = int(cx-width/2)
+            y1 = int(cy-height/2)
+            x2 = int(cx+width/2)
+            y2 = int(cy-height/2)
+            x3 = int(cx+width/2)
+            y3 = int(cy+height/2)
+            x4 = int(cx-width/2)
+            y4 = int(cy+height/2)
+            img_cut = img_rotated[max(0,y1-loose):min(nH,y3+loose),max(0,x1-loose):min(nW,x3+loose),:]
+        else:
+            x1 = int(cx-width/2)
+            y1 = int(cy-height/2)
+            x3 = int(cx+width/2)
+            y3 = int(cy+height/2)
+            img_cut = img[max(0,y1-loose):min(h,y3+loose),max(0,x1-loose):min(w,x3+loose),:]
         m,n,_ = img_cut.shape
         if m>n+10:
             img_cut = img_cut.transpose(1,0,2)

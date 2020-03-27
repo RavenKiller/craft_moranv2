@@ -78,7 +78,7 @@ def craft_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, 
     t1 = time.time()
 
     # Post-processing
-    boxes, polys, rot_rects = craft_utils.getDetBoxes(score_text, score_link, text_threshold, link_threshold, low_text, poly)
+    boxes, polys, rot_rects = craft_utils.getDetBoxes(score_text, score_link, text_threshold, link_threshold, low_text, False)
     # coordinate adjustment
     boxes = craft_utils.adjustResultCoordinates(boxes, ratio_w, ratio_h)
     polys = craft_utils.adjustResultCoordinates(polys, ratio_w, ratio_h)
@@ -113,7 +113,7 @@ parser.add_argument('--canvas_size', default=1280, type=int, help='image size fo
 parser.add_argument('--mag_ratio', default=1.5, type=float, help='image magnification ratio')
 parser.add_argument('--poly', default=False, action='store_true', help='enable polygon type')
 parser.add_argument('--show_time', default=False, action='store_true', help='show processing time')
-parser.add_argument('--refine', default=True, action='store_true', help='enable link refiner')
+parser.add_argument('--refine', default=False, action='store_true', help='enable link refiner')
 parser.add_argument('--refiner_model', default='pretrained/craft_refiner_CTW1500.pth', type=str, help='pretrained refiner model')
 # moran 
 
@@ -123,8 +123,10 @@ moran_path = args.moran_path
 alphabet = '0:1:2:3:4:5:6:7:8:9:a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:x:y:z:$'
 
 if __name__ == '__main__':
-    all_text = []
-    all_text_reverse = []
+    ################################################
+    # cv2 initialize
+    ################################################
+    cap = cv2.VideoCapture(0)
     ################################################
     # CRAFT loading part
     ################################################
@@ -155,7 +157,7 @@ if __name__ == '__main__':
             refine_net.load_state_dict(copyStateDict(torch.load(args.refiner_model, map_location='cpu')))
 
         refine_net.eval()
-        args.poly = True
+        args.poly = False
     ################################################
     # MORAN loading part
     ################################################
@@ -182,53 +184,92 @@ if __name__ == '__main__':
         p.requires_grad = False
     MORAN.eval()
 
-    ################################################
-    # CRAFT processing part
-    ################################################
-    # load data
-    image = imgproc.loadImage(args.img_path)
-    image_raw = image.copy()
+    while(cap.isOpened()):
+        all_text = []
+        all_text_reverse = []
 
-    bboxes, polys, score_text,rot_rects = craft_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
+        ################################################
+        # CRAFT processing part
+        ################################################
+        # load data
+        # image = imgproc.loadImage(args.img_path)
+        # image_raw = image.copy()
+        # cap.read()
+        tik = time.time()
+        ret, image = cap.read()
+        image_raw = image.copy()
+        bboxes, polys, score_text,rot_rects = craft_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
+        print("time1: ",time.time()-tik)
+        # save text rectangles
+        filename, file_ext = os.path.splitext(os.path.basename(args.img_path))
+        img_cuts = file_utils.saveSplitTextRects(image,rot_rects,bboxes,save_folder=tmp_folder,save_file=True,save_prefix="rect_"+filename)
+        print("time2: ",time.time()-tik)
+        ###############################################
+        # MORAN processing part
+        ################################################
+        # if len(img_cuts)==0:
+        #     continue
+        # converter = utils.strLabelConverterForAttention(alphabet, ':')
+        # transformer = dataset.resizeNormalize((100, 32))
+        # images = [transformer(Image.fromarray(img.astype('uint8')).convert('L')) for img in img_cuts]
+        # images = [Variable(img.view(1, *img.size())) for img in images]
+        # all_image = torch.cat(images,axis=0)
+        # if cuda_flag:
+        #     all_image = all_image.cuda()
+        # text = torch.LongTensor(1 * 5)
+        # length = torch.IntTensor(1)
+        # text = Variable(text)
+        # length = Variable(length)
 
-    # save text rectangles
-    filename, file_ext = os.path.splitext(os.path.basename(args.img_path))
-    img_cuts = file_utils.saveSplitTextRects(image,rot_rects,bboxes,save_folder=tmp_folder,save_file=False,save_prefix="rect_"+filename)
+        # max_iter = 20
+        # t, l = converter.encode('0'*max_iter)
+        # utils.loadData(text, t)
+        # print(text)
+        # print(text.shape)
+        # utils.loadData(length, l)
+        # length = torch.ones(len(img_cuts))*20
+        # print(length.shape)
+        # output = MORAN(all_image, length, text, text, test=True, debug=False)
 
-    ###############################################
-    # MORAN processing part
-    ################################################
-    for img in img_cuts:
-        converter = utils.strLabelConverterForAttention(alphabet, ':')
-        transformer = dataset.resizeNormalize((100, 32))
-        image = Image.fromarray(img.astype('uint8')).convert('L')
-        image = transformer(image)
-        # os.remove(img_path)
+        # print(output.shape)
+        for img in img_cuts:
 
-        if cuda_flag:
-            image = image.cuda()
-        image = image.view(1, *image.size())
-        image = Variable(image)
-        text = torch.LongTensor(1 * 5)
-        length = torch.IntTensor(1)
-        text = Variable(text)
-        length = Variable(length)
+            converter = utils.strLabelConverterForAttention(alphabet, ':')
+            transformer = dataset.resizeNormalize((100, 32))
+            image = Image.fromarray(img.astype('uint8')).convert('L')
+            image = transformer(image)
+            # os.remove(img_path)
 
-        max_iter = 20
-        t, l = converter.encode('0'*max_iter)
-        utils.loadData(text, t)
-        utils.loadData(length, l)
-        output = MORAN(image, length, text, text, test=True, debug=False)
+            if cuda_flag:
+                image = image.cuda()
+            image = image.view(1, *image.size())
+            image = Variable(image)
+            text = torch.LongTensor(1 * 5)
+            length = torch.IntTensor(1)
+            text = Variable(text)
+            length = Variable(length)
 
-        preds, preds_reverse = output[0]
-        _, preds = preds.max(1)
-        _, preds_reverse = preds_reverse.max(1)
+            max_iter = 20
+            t, l = converter.encode('0'*max_iter)
+            utils.loadData(text, t)
+            utils.loadData(length, l)
+            output = MORAN(image, length, text, text, test=True, debug=False)
 
-        sim_preds = converter.decode(preds.data, length.data)
-        sim_preds = sim_preds.strip().split('$')[0]
-        sim_preds_reverse = converter.decode(preds_reverse.data, length.data)
-        sim_preds_reverse = sim_preds_reverse.strip().split('$')[0]
-        all_text.append(sim_preds)
-        all_text_reverse.append(sim_preds_reverse[::-1])
-        # print('\nResult:\n' + 'Left to Right: ' + sim_preds + '\nRight to Left: ' + sim_preds_reverse + '\n\n')
-    result_img = file_utils.saveResult(args.img_path, image_raw[:,:,::-1], polys, texts=all_text,dirname=tmp_folder)
+            preds, preds_reverse = output[0]
+            _, preds = preds.max(1)
+            _, preds_reverse = preds_reverse.max(1)
+
+            sim_preds = converter.decode(preds.data, length.data)
+            sim_preds = sim_preds.strip().split('$')[0]
+            sim_preds_reverse = converter.decode(preds_reverse.data, length.data)
+            sim_preds_reverse = sim_preds_reverse.strip().split('$')[0]
+            all_text.append(sim_preds)
+            all_text_reverse.append(sim_preds_reverse[::-1])
+            # print('\nResult:\n' + 'Left to Right: ' + sim_preds + '\nRight to Left: ' + sim_preds_reverse + '\n\n')
+        print("time3: ",time.time()-tik)
+        result_img = file_utils.saveResult(args.img_path, image_raw[:,:,::-1], polys,save_file=False, texts=all_text,dirname=tmp_folder)
+        print("time4: ",time.time()-tik)
+        print(all_text)
+        cv2.imshow('Capture', result_img)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break

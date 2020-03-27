@@ -87,8 +87,8 @@ class Attention(nn.Module):
         assert(input_size == nC)
         assert(nB == text_length.numel())
 
-        num_steps = text_length.data.max()
-        num_labels = text_length.data.sum()
+        num_steps = text_length.data.max().int()
+        num_labels = text_length.data.sum().int()
 
         if not test:
 
@@ -126,11 +126,12 @@ class Attention(nn.Module):
 
             hidden = Variable(torch.zeros(nB,hidden_size).type_as(feats.data))
             targets_temp = Variable(torch.zeros(nB).long().contiguous())
-            probs = Variable(torch.zeros(nB*num_steps, self.num_classes))
+            tmp = nB*num_steps
+            tmp = tmp.int()
+            probs = Variable(torch.zeros(tmp, self.num_classes))
             if self.cuda:
                 targets_temp = targets_temp.cuda()
                 probs = probs.cuda()
-
             for i in range(num_steps):
                 cur_embeddings = self.char_embeddings.index_select(0, targets_temp)
                 hidden, alpha = self.attention_cell(hidden, feats, cur_embeddings, test)
