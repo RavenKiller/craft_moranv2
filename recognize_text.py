@@ -1,8 +1,8 @@
 """  
 Copyright (c) 2019-present NAVER Corp.
 MIT License
+只读取一张图片并返回文本列表
 """
-
 # -*- coding: utf-8 -*-
 import sys
 import os
@@ -19,15 +19,14 @@ from PIL import Image
 import cv2
 from skimage import io
 import numpy as np
-import craft_utils
-import imgproc
-import file_utils
 import json
 import zipfile
 
-from craft import CRAFT
 import tools.utils as utils
 import tools.dataset as dataset
+import tools.imgproc as imgproc
+import tools.craft_utils as craft_utils
+from models.craft import CRAFT
 from models.moran import MORAN
 
 import matplotlib.pyplot as plt
@@ -67,28 +66,14 @@ def craft_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, 
     score_text = y[0,:,:,0].cpu().data.numpy()
     score_link = y[0,:,:,1].cpu().data.numpy()
 
-    # refine link
-    if refine_net is not None:
-        with torch.no_grad():
-            y_refiner = refine_net(y, feature)
-        score_link = y_refiner[0,:,:,0].cpu().data.numpy()
     tmp1 = score_link.copy()
     tmp2 = score_text.copy()
-    t0 = time.time() - t0
-    t1 = time.time()
 
     # Post-processing
     boxes, polys, rot_rects = craft_utils.getDetBoxes(score_text, score_link, text_threshold, link_threshold, low_text, False)
     # coordinate adjustment
     boxes = craft_utils.adjustResultCoordinates(boxes, ratio_w, ratio_h)
-    polys = craft_utils.adjustResultCoordinates(polys, ratio_w, ratio_h)
     rot_rects = craft_utils.adjustResultCoordinatesNew(rot_rects, ratio_w, ratio_h)
-    for k in range(len(polys)):
-        if polys[k] is None: 
-            polys[k] = boxes[k]
-
-    t1 = time.time() - t1
-
     # render results (optional)
     render_img = score_text.copy()
     render_img = np.hstack((render_img, score_link))
@@ -96,11 +81,8 @@ def craft_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, 
 
     if args.show_time : print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
 
-    return boxes, polys, ret_score_text,rot_rects
+    return boxes, ret_score_text,rot_rects
 
-tmp_folder = "new"
-if not os.path.isdir(tmp_folder):
-    os.mkdir(tmp_folder)
 parser = argparse.ArgumentParser(description='CRAFT Text Detection')
 # CRAFT args
 parser.add_argument('--craft_trained_model', default='pretrained/craft_mlt_25k.pth', type=str, help='pretrained model')
@@ -121,12 +103,7 @@ parser.add_argument('--moran_path', default='pretrained/moran.pth', type=str, he
 args = parser.parse_args()
 moran_path = args.moran_path
 alphabet = '0:1:2:3:4:5:6:7:8:9:a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:x:y:z:$'
-
-if __name__ == '__main__':
-    ################################################
-    # cv2 initialize
-    ################################################
-    cap = cv2.VideoCapture(0)
+def recognize(image):
     ################################################
     # CRAFT loading part
     ################################################
@@ -143,31 +120,16 @@ if __name__ == '__main__':
         cudnn.benchmark = False
 
     net.eval()
-    # LinkRefiner
-    refine_net = None
-    if args.refine:
-        from refinenet import RefineNet
-        refine_net = RefineNet()
-        print('Loading weights of refiner from checkpoint (' + args.refiner_model + ')')
-        if args.cuda:
-            refine_net.load_state_dict(copyStateDict(torch.load(args.refiner_model)))
-            refine_net = refine_net.cuda()
-            refine_net = torch.nn.DataParallel(refine_net)
-        else:
-            refine_net.load_state_dict(copyStateDict(torch.load(args.refiner_model, map_location='cpu')))
-
-        refine_net.eval()
-        args.poly = False
     ################################################
     # MORAN loading part
     ################################################
     cuda_flag = False
     if torch.cuda.is_available():
         cuda_flag = True
-        MORAN = MORAN(1, len(alphabet.split(':')), 256, 32, 100, BidirDecoder=True, CUDA=cuda_flag)
-        MORAN = MORAN.cuda()
+        moran = MORAN(1, len(alphabet.split(':')), 256, 32, 100, BidirDecoder=True, CUDA=cuda_flag)
+        moran = moran.cuda()
     else:
-        MORAN = MORAN(1, len(alphabet.split(':')), 256, 32, 100, BidirDecoder=True, inputDataType='torch.FloatTensor', CUDA=cuda_flag)
+        moran = MORAN(1, len(alphabet.split(':')), 256, 32, 100, BidirDecoder=True, inputDataType='torch.FloatTensor', CUDA=cuda_flag)
 
     print('loading pretrained model from %s' % moran_path)
     if cuda_flag:
@@ -178,67 +140,58 @@ if __name__ == '__main__':
     for k, v in state_dict.items():
         name = k.replace("module.", "") # remove `module.`
         MORAN_state_dict_rename[name] = v
-    MORAN.load_state_dict(MORAN_state_dict_rename)
+    moran.load_state_dict(MORAN_state_dict_rename)
 
-    for p in MORAN.parameters():
+    for p in moran.parameters():
         p.requires_grad = False
-    MORAN.eval()
-    while(cap.isOpened()):
-        all_text = []
-        all_text_reverse = []
+    moran.eval()
+    ################################################
+    # CRAFT processing part
+    ################################################
+    # load data
+    # image = cv2.imread('test/1.jpg')
+    image_raw = image.copy()
+    bboxes, score_text,rot_rects = craft_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly)
+    # save text rectangles
+    filename, file_ext = os.path.splitext(os.path.basename(args.img_path))
+    # 这个可以保存切分的图片
+    img_cuts = utils.saveSplitTextRects(image,rot_rects,save_file=False)
+    if not img_cuts:
+        return None
+    ###############################################
+    # MORAN processing part
+    ################################################
+    converter = utils.strLabelConverterForAttention(alphabet, ':')
+    transformer = dataset.resizeNormalize((100, 32))
+    images = [transformer(Image.fromarray(img.astype('uint8')).convert('L')) for img in img_cuts]
+    images = [Variable(img.view(1, *img.size())) for img in images]
+    all_image = torch.cat(images,axis=0)
+    if cuda_flag:
+        all_image = all_image.cuda()
+    text = torch.LongTensor(1 * 5)
+    length = torch.IntTensor(1)
+    text = Variable(text)
+    length = Variable(length)
 
-        ################################################
-        # CRAFT processing part
-        ################################################
-        # load data
-        
-        tik = time.time()
-        ret, image = cap.read()
-        # image = cv2.imread('test/1.jpg')
-        image_raw = image.copy()
-        bboxes, polys, score_text,rot_rects = craft_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
-        print("time1: ",time.time()-tik)
-        # save text rectangles
-        filename, file_ext = os.path.splitext(os.path.basename(args.img_path))
-        img_cuts = file_utils.saveSplitTextRects(image,rot_rects,bboxes,save_folder=tmp_folder,save_file=True,save_prefix="rect_"+filename)
-        print("time2: ",time.time()-tik)
-        if not img_cuts:
-            continue
-        ###############################################
-        # MORAN processing part
-        ################################################
-        converter = utils.strLabelConverterForAttention(alphabet, ':')
-        transformer = dataset.resizeNormalize((100, 32))
-        images = [transformer(Image.fromarray(img.astype('uint8')).convert('L')) for img in img_cuts]
-        images = [Variable(img.view(1, *img.size())) for img in images]
-        all_image = torch.cat(images,axis=0)
-        if cuda_flag:
-            all_image = all_image.cuda()
-        text = torch.LongTensor(1 * 5)
-        length = torch.IntTensor(1)
-        text = Variable(text)
-        length = Variable(length)
+    # 从单张修改为多张，只需要改Length
+    # 作者给的处理工具已经考虑了多个图片同时处理的情况
+    max_iter = 20
+    t, l = converter.encode('0'*max_iter)
+    utils.loadData(text, t)
+    utils.loadData(length, l)
+    length = torch.ones(len(img_cuts))*20
+    length = length.int()
+    output = moran(all_image, length, text, text, test=True, debug=False)
+    preds, preds_reverse = output[0]
+    _, preds = preds.max(1)
+    _, preds_reverse = preds_reverse.max(1)
 
-        # 从单张修改为多张，只需要改Length
-        # 作者给的处理工具已经考虑了多个图片同时处理的情况
-        max_iter = 20
-        t, l = converter.encode('0'*max_iter)
-        utils.loadData(text, t)
-        utils.loadData(length, l)
-        length = torch.ones(len(img_cuts))*20
-        length = length.int()
-        output = MORAN(all_image, length, text, text, test=True, debug=False)
-        preds, preds_reverse = output[0]
-        _, preds = preds.max(1)
-        _, preds_reverse = preds_reverse.max(1)
+    sim_preds = converter.decode(preds.data, length.data)
+    all_text = [v.strip().split('$')[0] for v in sim_preds]
+    sim_preds_reverse = converter.decode(preds_reverse.data, length.data)
+    all_text_reverse = [v.strip().split('$')[0] for v in sim_preds_reverse]
+    return all_text, all_text_reverse
 
-        sim_preds = converter.decode(preds.data, length.data)
-        all_text = [v.strip().split('$')[0] for v in sim_preds]
-        print(sim_preds)
-        print("time3: ",time.time()-tik)
-        result_img = file_utils.saveResult(args.img_path, image_raw[:,:,::-1], polys,save_file=False, texts=all_text,dirname=tmp_folder)
-        print("time4: ",time.time()-tik)
-        print(all_text)
-        cv2.imshow('Capture', result_img)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+if __name__ == "__main__":
+    image = cv2.imread("test/1.jpg")
+    print(recognize(image))
