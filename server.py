@@ -1,13 +1,14 @@
 import tornado.ioloop
 import tornado.web
+import base64
 
-class MainHandler(tornado.web.RequestHandler):
-    def get(self):
-        self.write("Hello, world")
+class TextRecognitionHanlder(tornado.web.RequestHandler):
+    def post(self):
+        print(self.get_argument('image'))
 
 def make_app():
     return tornado.web.Application([
-        (r"/", MainHandler),
+        (r"/test_recognition", TextRecognitionHanlder),
     ])
 
 if __name__ == "__main__":
