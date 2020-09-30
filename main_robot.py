@@ -166,44 +166,46 @@ class TextRecognitionHanlder(tornado.web.RequestHandler):
         filename, file_ext = os.path.splitext(os.path.basename(args.img_path))
         # 这个可以保存切分的图片
         img_cuts = utils.saveSplitTextRects(image,rot_rects,save_file=False,save_prefix="rect_"+filename)
-        # print("time2: ",time.time()-tik)
-        self.write('error')
+        if len(img_cuts)>0:
+            
 
-        ###############################################
-        # MORAN processing part
-        ################################################
-        converter = utils.strLabelConverterForAttention(alphabet, ':')
-        transformer = dataset.resizeNormalize((100, 32))
-        images = [transformer(Image.fromarray(image.astype('uint8')).convert('L')) for image in img_cuts]
-        images = [Variable(image.view(1, *image.size())) for image in images]
-        all_image = torch.cat(images,axis=0)
-        all_image = all_image.cuda()
-        text = torch.LongTensor(1 * 5)
-        length = torch.IntTensor(1)
-        text = Variable(text)
-        length = Variable(length)
+            ###############################################
+            # MORAN processing part
+            ################################################
+            converter = utils.strLabelConverterForAttention(alphabet, ':')
+            transformer = dataset.resizeNormalize((100, 32))
+            images = [transformer(Image.fromarray(image.astype('uint8')).convert('L')) for image in img_cuts]
+            images = [Variable(image.view(1, *image.size())) for image in images]
+            all_image = torch.cat(images,axis=0)
+            all_image = all_image.cuda()
+            text = torch.LongTensor(1 * 5)
+            length = torch.IntTensor(1)
+            text = Variable(text)
+            length = Variable(length)
 
-        # 从单张修改为多张，只需要改Length
-        # 作者给的处理工具已经考虑了多个图片同时处理的情况
-        max_iter = 20
-        t, l = converter.encode('0'*max_iter)
-        utils.loadData(text, t)
-        utils.loadData(length, l)
-        length = torch.ones(len(img_cuts))*20
-        length = length.int()
-        output = model_moran(all_image, length, text, text, test=True, debug=False)
-        preds, preds_reverse = output[0]
-        _, preds = preds.max(1)
-        _, preds_reverse = preds_reverse.max(1)
+            # 从单张修改为多张，只需要改Length
+            # 作者给的处理工具已经考虑了多个图片同时处理的情况
+            max_iter = 20
+            t, l = converter.encode('0'*max_iter)
+            utils.loadData(text, t)
+            utils.loadData(length, l)
+            length = torch.ones(len(img_cuts))*20
+            length = length.int()
+            output = model_moran(all_image, length, text, text, test=True, debug=False)
+            preds, preds_reverse = output[0]
+            _, preds = preds.max(1)
+            _, preds_reverse = preds_reverse.max(1)
 
-        sim_preds = converter.decode(preds.data, length.data)
-        all_text = [v.strip().split('$')[0] for v in sim_preds]
-        print(sim_preds)
-        # print("time3: ",time.time()-tik)
-        result_img = utils.saveResult(args.img_path, image_raw[:,:,::-1], bboxes,save_file=False, texts=all_text)
-        # print("time4: ",time.time()-tik)
-        cv2.imwrite("result.png",result_img)
-        print(all_text)
+            sim_preds = converter.decode(preds.data, length.data)
+            all_text = [v.strip().split('$')[0] for v in sim_preds]
+            print(sim_preds)
+            # print("time3: ",time.time()-tik)
+            result_img = utils.saveResult(args.img_path, image_raw[:,:,::-1], bboxes,save_file=False, texts=all_text)
+            # print("time4: ",time.time()-tik)
+            cv2.imwrite("result.png",result_img)
+            print(all_text)
+        else:
+            cv2.imwrite("result.png",image_raw)
 
 
 def make_app():
